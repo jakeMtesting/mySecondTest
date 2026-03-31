@@ -1,15 +1,19 @@
 using AntivirusScanner;
 using AntivirusScanner.Models;
+using System;
+using System.IO;
+using System.Linq;
 
-// ─── Colour helpers ────────────────────────────────────────────────────────────
-
-static ConsoleColor ColorFor(ThreatLevel level) => level switch
+static ConsoleColor ColorFor(ThreatLevel level)
 {
-    ThreatLevel.Malicious  => ConsoleColor.Red,
-    ThreatLevel.Likely     => ConsoleColor.DarkYellow,
-    ThreatLevel.Suspicious => ConsoleColor.Yellow,
-    _                      => ConsoleColor.Green,
-};
+    switch (level)
+    {
+        case ThreatLevel.Malicious:  return ConsoleColor.Red;
+        case ThreatLevel.Likely:     return ConsoleColor.DarkYellow;
+        case ThreatLevel.Suspicious: return ConsoleColor.Yellow;
+        default:                     return ConsoleColor.Green;
+    }
+}
 
 static void WriteColored(string text, ConsoleColor color)
 {
@@ -24,8 +28,6 @@ static void WriteColoredLine(string text, ConsoleColor color)
     Console.WriteLine();
 }
 
-// ─── Banner ───────────────────────────────────────────────────────────────────
-
 static void PrintBanner()
 {
     Console.WriteLine();
@@ -35,15 +37,13 @@ static void PrintBanner()
     Console.WriteLine();
 }
 
-// ─── Usage ────────────────────────────────────────────────────────────────────
-
 static void PrintUsage()
 {
-    Console.Error.WriteLine("Usage: AntivirusScanner <file-path> [--verbose]");
+    Console.Error.WriteLine("Usage: AntivirusScanner <file-path> [--verbose] [--no-color]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Options:");
     Console.Error.WriteLine("  --verbose   Show every individual finding");
-    Console.Error.WriteLine("  --no-color  Disable ANSI colour output");
+    Console.Error.WriteLine("  --no-color  Disable colour output");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Exit codes:");
     Console.Error.WriteLine("  0  Clean");
@@ -62,26 +62,35 @@ if (args.Length == 0)
     return 9;
 }
 
-bool verbose  = args.Contains("--verbose",  StringComparer.OrdinalIgnoreCase);
-bool noColor  = args.Contains("--no-color", StringComparer.OrdinalIgnoreCase);
+bool verbose = Array.Exists(args, a => string.Equals(a, "--verbose",  StringComparison.OrdinalIgnoreCase));
+bool noColor = Array.Exists(args, a => string.Equals(a, "--no-color", StringComparison.OrdinalIgnoreCase));
 
-if (noColor)
-    Console.OutputEncoding = System.Text.Encoding.ASCII;
+string filePath = null;
+foreach (string arg in args)
+{
+    if (!arg.StartsWith("--"))
+    {
+        filePath = arg;
+        break;
+    }
+}
 
-string filePath = args.First(a => !a.StartsWith("--"));
+if (filePath == null)
+{
+    Console.Error.WriteLine("[ERROR] No file path provided.");
+    PrintUsage();
+    return 9;
+}
 
 PrintBanner();
-
 Console.WriteLine($"  Target : {filePath}");
 
 ScanResult result;
 try
 {
     var scanner = new Scanner();
-
     Console.WriteLine("  Status : Scanning...");
     Console.WriteLine();
-
     result = scanner.Scan(filePath);
 }
 catch (FileNotFoundException ex)
@@ -109,39 +118,38 @@ Console.WriteLine();
 
 if (result.Threats.Count == 0 || result.OverallThreatLevel == ThreatLevel.Clean)
 {
-    WriteColoredLine("  ✔  No threats detected — file appears clean.", ConsoleColor.Green);
+    WriteColoredLine("  No threats detected — file appears clean.", ConsoleColor.Green);
 }
 else
 {
-    ConsoleColor verdictColor = ColorFor(result.OverallThreatLevel);
-    string verdictLabel = result.OverallThreatLevel switch
+    string verdictLabel;
+    switch (result.OverallThreatLevel)
     {
-        ThreatLevel.Malicious  => "MALICIOUS",
-        ThreatLevel.Likely     => "LIKELY MALICIOUS",
-        ThreatLevel.Suspicious => "SUSPICIOUS",
-        _                      => "CLEAN",
-    };
+        case ThreatLevel.Malicious:  verdictLabel = "MALICIOUS";         break;
+        case ThreatLevel.Likely:     verdictLabel = "LIKELY MALICIOUS";  break;
+        case ThreatLevel.Suspicious: verdictLabel = "SUSPICIOUS";        break;
+        default:                     verdictLabel = "CLEAN";             break;
+    }
 
-    WriteColored($"  Verdict : ", ConsoleColor.White);
+    ConsoleColor verdictColor = ColorFor(result.OverallThreatLevel);
+    WriteColored("  Verdict : ", ConsoleColor.White);
     WriteColoredLine($"[{verdictLabel}]  (total score: {result.TotalScore})", verdictColor);
     Console.WriteLine();
 
-    // Group findings by heuristic
     var groups = result.Threats
         .GroupBy(t => t.HeuristicName)
         .OrderByDescending(g => g.Sum(t => t.Score));
 
     foreach (var group in groups)
     {
-        var groupScore = group.Sum(t => t.Score);
+        int groupScore = group.Sum(t => t.Score);
         WriteColoredLine($"  ┌─ {group.Key}  (group score: {groupScore})", ConsoleColor.Cyan);
 
-        // In non-verbose mode show only Likely / Malicious findings
         var toShow = verbose
             ? group.OrderByDescending(t => t.Score)
             : group.Where(t => t.Level >= ThreatLevel.Likely).OrderByDescending(t => t.Score);
 
-        foreach (var threat in toShow)
+        foreach (ThreatInfo threat in toShow)
         {
             ConsoleColor tc = ColorFor(threat.Level);
             Console.Write("  │  ");
@@ -158,6 +166,4 @@ else
 }
 
 Console.WriteLine();
-
-// ─── Exit code mirrors the threat level ───────────────────────────────────────
 return (int)result.OverallThreatLevel;
