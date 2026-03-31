@@ -65,7 +65,7 @@ if (args.Length == 0)
 bool verbose = Array.Exists(args, a => string.Equals(a, "--verbose",  StringComparison.OrdinalIgnoreCase));
 bool noColor = Array.Exists(args, a => string.Equals(a, "--no-color", StringComparison.OrdinalIgnoreCase));
 
-string filePath = null;
+string? filePath = null;
 foreach (string arg in args)
 {
     if (!arg.StartsWith("--"))
