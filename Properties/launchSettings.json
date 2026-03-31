@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "AntivirusScanner": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\path\\to\\file.exe --verbose",
+      "environmentVariables": {}
+    }
+  }
+}
