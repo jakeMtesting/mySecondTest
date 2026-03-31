@@ -42,7 +42,7 @@ static void PrintUsage()
     Console.Error.WriteLine("Usage: AntivirusScanner <file-path> [--verbose] [--no-color]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Options:");
-    Console.Error.WriteLine("  --verbose   Show every individual finding");
+    Console.Error.WriteLine("  --verbose   Show every individual finding including Suspicious-level");
     Console.Error.WriteLine("  --no-color  Disable colour output");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Exit codes:");
@@ -64,6 +64,9 @@ if (args.Length == 0)
 
 bool verbose = Array.Exists(args, a => string.Equals(a, "--verbose",  StringComparison.OrdinalIgnoreCase));
 bool noColor = Array.Exists(args, a => string.Equals(a, "--no-color", StringComparison.OrdinalIgnoreCase));
+
+if (noColor)
+    Console.OutputEncoding = System.Text.Encoding.ASCII;
 
 string? filePath = null;
 foreach (string arg in args)
@@ -109,12 +112,25 @@ catch (IOException ex)
     return 9;
 }
 
-// ─── Results ──────────────────────────────────────────────────────────────────
+// ─── File info ────────────────────────────────────────────────────────────────
 
 Console.WriteLine($"  File   : {Path.GetFileName(result.FilePath)}");
 Console.WriteLine($"  Size   : {result.FileSize:N0} bytes");
 Console.WriteLine($"  SHA256 : {result.FileSha256}");
 Console.WriteLine();
+
+// ─── Mitigations summary ──────────────────────────────────────────────────────
+
+if (result.Mitigations.Count > 0)
+{
+    WriteColoredLine("  Mitigating signals:", ConsoleColor.Green);
+    foreach (ThreatInfo m in result.Mitigations)
+        WriteColoredLine($"    + {m.Description}", ConsoleColor.Green);
+    Console.WriteLine($"  Score : {result.RawScore} raw  -  {result.MitigatedBy} mitigated  =  {result.TotalScore} effective");
+    Console.WriteLine();
+}
+
+// ─── Verdict ──────────────────────────────────────────────────────────────────
 
 if (result.Threats.Count == 0 || result.OverallThreatLevel == ThreatLevel.Clean)
 {
@@ -125,15 +141,15 @@ else
     string verdictLabel;
     switch (result.OverallThreatLevel)
     {
-        case ThreatLevel.Malicious:  verdictLabel = "MALICIOUS";         break;
-        case ThreatLevel.Likely:     verdictLabel = "LIKELY MALICIOUS";  break;
-        case ThreatLevel.Suspicious: verdictLabel = "SUSPICIOUS";        break;
-        default:                     verdictLabel = "CLEAN";             break;
+        case ThreatLevel.Malicious:  verdictLabel = "MALICIOUS";        break;
+        case ThreatLevel.Likely:     verdictLabel = "LIKELY MALICIOUS"; break;
+        case ThreatLevel.Suspicious: verdictLabel = "SUSPICIOUS";       break;
+        default:                     verdictLabel = "CLEAN";            break;
     }
 
     ConsoleColor verdictColor = ColorFor(result.OverallThreatLevel);
     WriteColored("  Verdict : ", ConsoleColor.White);
-    WriteColoredLine($"[{verdictLabel}]  (total score: {result.TotalScore})", verdictColor);
+    WriteColoredLine($"[{verdictLabel}]  (effective score: {result.TotalScore})", verdictColor);
     Console.WriteLine();
 
     var groups = result.Threats

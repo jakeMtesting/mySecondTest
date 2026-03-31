@@ -9,9 +9,9 @@ namespace AntivirusScanner
 {
     /// <summary>
     /// Orchestrates all registered heuristics against a single file.
-    /// Heuristics are run in declaration order; results accumulate into a
-    /// <see cref="ScanResult"/> whose overall verdict is derived from the
-    /// combined score of all <see cref="ThreatInfo"/> entries.
+    /// Heuristics run in declaration order and accumulate findings into a
+    /// <see cref="ScanResult"/>.  Mitigating heuristics (e.g. Authenticode)
+    /// can reduce the effective score via <see cref="ScanResult.AddMitigation"/>.
     /// </summary>
     public sealed class Scanner
     {
@@ -25,6 +25,7 @@ namespace AntivirusScanner
                 new EntropyHeuristic(),
                 new ImportTableHeuristic(),
                 new SuspiciousStringHeuristic(),
+                new AuthenticodeHeuristic(),   // runs last so it can mitigate the above
             };
         }
 
@@ -32,12 +33,6 @@ namespace AntivirusScanner
         /// Scans the file at <paramref name="filePath"/> and returns a populated
         /// <see cref="ScanResult"/>.
         /// </summary>
-        /// <exception cref="FileNotFoundException">
-        /// Thrown when the target file does not exist.
-        /// </exception>
-        /// <exception cref="IOException">
-        /// Thrown when the file cannot be read (permissions, locked, etc.).
-        /// </exception>
         public ScanResult Scan(string filePath)
         {
             var info = new FileInfo(filePath);

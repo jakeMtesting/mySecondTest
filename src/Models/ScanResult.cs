@@ -8,13 +8,25 @@ namespace AntivirusScanner.Models
         public string FilePath { get; }
         public long FileSize { get; }
         public string FileSha256 { get; }
+
+        /// <summary>Positive-score findings from heuristics.</summary>
         public List<ThreatInfo> Threats { get; } = new List<ThreatInfo>();
-        public int TotalScore => Threats.Sum(t => t.Score);
+
+        /// <summary>
+        /// Mitigating signals (e.g. Authenticode signature present) that reduce
+        /// the raw score.  Each entry carries a positive <see cref="ThreatInfo.Score"/>
+        /// that is subtracted from the total.
+        /// </summary>
+        public List<ThreatInfo> Mitigations { get; } = new List<ThreatInfo>();
+
+        public int RawScore      => Threats.Sum(t => t.Score);
+        public int MitigatedBy   => Mitigations.Sum(m => m.Score);
+        public int TotalScore    => System.Math.Max(0, RawScore - MitigatedBy);
 
         public ThreatLevel OverallThreatLevel =>
-            TotalScore >= 80 ? ThreatLevel.Malicious :
-            TotalScore >= 40 ? ThreatLevel.Likely :
-            TotalScore >= 15 ? ThreatLevel.Suspicious :
+            TotalScore >= 120 ? ThreatLevel.Malicious :
+            TotalScore >=  65 ? ThreatLevel.Likely :
+            TotalScore >=  25 ? ThreatLevel.Suspicious :
             ThreatLevel.Clean;
 
         public ScanResult(string filePath, long fileSize, string fileSha256)
@@ -24,6 +36,7 @@ namespace AntivirusScanner.Models
             FileSha256 = fileSha256;
         }
 
-        public void AddThreat(ThreatInfo threat) => Threats.Add(threat);
+        public void AddThreat(ThreatInfo threat)     => Threats.Add(threat);
+        public void AddMitigation(ThreatInfo signal) => Mitigations.Add(signal);
     }
 }

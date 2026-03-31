@@ -8,8 +8,12 @@ namespace AntivirusScanner.Heuristics
     /// <summary>
     /// Extracts printable ASCII/UTF-16LE strings from the file and matches them
     /// against known indicators of compromise (IOCs) grouped into categories.
-    /// Each category carries its own scoring weight so that a single weak signal
-    /// does not trigger a false positive, but combinations elevate the verdict.
+    ///
+    /// Patterns are intentionally specific: generic strings that appear in almost
+    /// every Windows binary (http://, connect, password, socket) are excluded to
+    /// avoid false positives on legitimate software such as installers and browsers.
+    /// Only strings that are either unique to malicious tooling or that carry high
+    /// contextual significance are included.
     /// </summary>
     public sealed class SuspiciousStringHeuristic : IHeuristic
     {
@@ -38,82 +42,79 @@ namespace AntivirusScanner.Heuristics
         private static readonly StringPattern[] Patterns = new StringPattern[]
         {
             // --- Shell / command execution ---
-            new StringPattern("cmd.exe",            "Shell",   "References cmd.exe",                                   10, ThreatLevel.Suspicious),
-            new StringPattern("powershell",         "Shell",   "References PowerShell",                                10, ThreatLevel.Suspicious),
-            new StringPattern("powershell -enc",    "Shell",   "Base64-encoded PowerShell command",                    25, ThreatLevel.Likely),
-            new StringPattern("powershell -nop",    "Shell",   "PowerShell -NoProfile (script-block evasion)",         20, ThreatLevel.Likely),
-            new StringPattern("wscript.exe",        "Shell",   "References WScript (script host)",                     15, ThreatLevel.Suspicious),
-            new StringPattern("cscript.exe",        "Shell",   "References CScript (script host)",                     15, ThreatLevel.Suspicious),
-            new StringPattern("mshta.exe",          "Shell",   "References MSHTA — common LOLBin",                     20, ThreatLevel.Likely),
-            new StringPattern("rundll32.exe",       "Shell",   "References RunDLL32 — common LOLBin",                  15, ThreatLevel.Suspicious),
-            new StringPattern("regsvr32.exe",       "Shell",   "References Regsvr32 — COM/DLL LOLBin",                 15, ThreatLevel.Suspicious),
-            new StringPattern("certutil",           "Shell",   "References Certutil — download/decode LOLBin",         20, ThreatLevel.Likely),
-            new StringPattern("bitsadmin",          "Shell",   "References BITSAdmin — download LOLBin",               20, ThreatLevel.Likely),
+            // cmd.exe and powershell appear in many tools, but the specific
+            // flag-style variants (-enc, -nop) are almost exclusively malicious.
+            new StringPattern("cmd.exe",            "Shell", "References cmd.exe",                                    8, ThreatLevel.Suspicious),
+            new StringPattern("powershell",         "Shell", "References PowerShell",                                 8, ThreatLevel.Suspicious),
+            new StringPattern("powershell -enc",    "Shell", "Base64-encoded PowerShell command",                    30, ThreatLevel.Likely),
+            new StringPattern("powershell -nop",    "Shell", "PowerShell -NoProfile bypass",                         25, ThreatLevel.Likely),
+            new StringPattern("powershell -w hidden","Shell","PowerShell hidden-window execution",                   25, ThreatLevel.Likely),
+            new StringPattern("wscript.exe",        "Shell", "References WScript (script host)",                     12, ThreatLevel.Suspicious),
+            new StringPattern("cscript.exe",        "Shell", "References CScript (script host)",                     12, ThreatLevel.Suspicious),
+            new StringPattern("mshta.exe",          "Shell", "References MSHTA — common LOLBin",                     25, ThreatLevel.Likely),
+            new StringPattern("rundll32.exe",       "Shell", "References RunDLL32 — common LOLBin",                  12, ThreatLevel.Suspicious),
+            new StringPattern("regsvr32.exe",       "Shell", "References Regsvr32 — COM/DLL LOLBin",                 12, ThreatLevel.Suspicious),
+            new StringPattern("certutil -decode",   "Shell", "Certutil base64 decode — common dropper step",         25, ThreatLevel.Likely),
+            new StringPattern("bitsadmin /transfer","Shell", "BITSAdmin download — LOLBin pattern",                  25, ThreatLevel.Likely),
 
             // --- Privilege escalation / UAC ---
-            new StringPattern("SeDebugPrivilege",      "Privesc", "Requests SeDebugPrivilege",                         25, ThreatLevel.Likely),
-            new StringPattern("AdjustTokenPrivileges", "Privesc", "Adjusts process token privileges",                  20, ThreatLevel.Suspicious),
-            new StringPattern("bypassuac",             "Privesc", "UAC bypass string",                                 40, ThreatLevel.Malicious),
-            new StringPattern("eventvwr.exe",          "Privesc", "eventvwr UAC bypass technique",                     30, ThreatLevel.Likely),
+            new StringPattern("SeDebugPrivilege",      "Privesc", "Requests SeDebugPrivilege",                       25, ThreatLevel.Likely),
+            new StringPattern("bypassuac",             "Privesc", "UAC bypass string",                               45, ThreatLevel.Malicious),
+            new StringPattern("eventvwr.exe",          "Privesc", "eventvwr UAC bypass technique",                   30, ThreatLevel.Likely),
 
-            // --- Network ---
-            new StringPattern("http://",            "Network", "Plain HTTP URL",                                        5, ThreatLevel.Suspicious),
-            new StringPattern("https://",           "Network", "HTTPS URL",                                             5, ThreatLevel.Suspicious),
-            new StringPattern("socket",             "Network", "Raw socket API usage",                                 10, ThreatLevel.Suspicious),
-            new StringPattern("WSAStartup",         "Network", "Winsock initialisation",                               10, ThreatLevel.Suspicious),
-            new StringPattern("connect",            "Network", "Network connect call",                                  8, ThreatLevel.Suspicious),
-            new StringPattern("InternetOpenUrl",    "Network", "WinINet HTTP request",                                 10, ThreatLevel.Suspicious),
-            new StringPattern("URLDownloadToFile",  "Network", "Downloads file via URL (common dropper pattern)",      25, ThreatLevel.Likely),
-            new StringPattern("WinHttpConnect",     "Network", "WinHTTP connectivity",                                 10, ThreatLevel.Suspicious),
-            new StringPattern("ShellExecute",       "Network", "ShellExecute (can launch downloaded payloads)",        10, ThreatLevel.Suspicious),
+            // --- Network (only high-specificity patterns) ---
+            // Generic strings like http://, connect, socket are excluded because
+            // they appear in virtually every network-capable legitimate binary.
+            new StringPattern("URLDownloadToFile",  "Network", "Downloads file via URL — classic dropper API",       25, ThreatLevel.Likely),
+            new StringPattern("InternetOpenUrl",    "Network", "Opens a URL via WinINet",                             8, ThreatLevel.Suspicious),
+            new StringPattern("WinHttpConnect",     "Network", "WinHTTP connectivity",                                8, ThreatLevel.Suspicious),
+            new StringPattern("WSAStartup",         "Network", "Winsock initialisation",                              5, ThreatLevel.Suspicious),
 
             // --- Credential harvesting ---
-            new StringPattern("mimikatz",                "Creds", "Mimikatz credential dumper string",                 50, ThreatLevel.Malicious),
-            new StringPattern("sekurlsa",                "Creds", "Mimikatz sekurlsa module reference",                50, ThreatLevel.Malicious),
-            new StringPattern("lsass",                   "Creds", "References LSASS (credential store)",               20, ThreatLevel.Likely),
-            new StringPattern("SamQueryInformationUser", "Creds", "SAM database query — credential access",            30, ThreatLevel.Likely),
-            new StringPattern("password",                "Creds", "Generic password string",                            5, ThreatLevel.Suspicious),
-            new StringPattern("NtlmHash",                "Creds", "NTLM hash reference",                               25, ThreatLevel.Likely),
+            new StringPattern("mimikatz",                "Creds", "Mimikatz credential dumper string",               55, ThreatLevel.Malicious),
+            new StringPattern("sekurlsa",                "Creds", "Mimikatz sekurlsa module reference",              55, ThreatLevel.Malicious),
+            new StringPattern("lsass.exe",               "Creds", "References LSASS process by name",               20, ThreatLevel.Likely),
+            new StringPattern("SamQueryInformationUser", "Creds", "SAM database query — credential access",          30, ThreatLevel.Likely),
+            new StringPattern("NtlmHash",                "Creds", "NTLM hash reference",                             25, ThreatLevel.Likely),
+            // "password" alone excluded — too generic; matches any login dialog or docs
 
-            // --- Registry persistence ---
+            // --- Registry persistence (specific keys only) ---
             new StringPattern(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", "Persist",
-                "Classic auto-run registry key",                                                                        30, ThreatLevel.Likely),
+                "Classic auto-run registry key",                                                                      30, ThreatLevel.Likely),
             new StringPattern(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", "Persist",
-                "Winlogon hijack registry key",                                                                         35, ThreatLevel.Likely),
-            new StringPattern("RegSetValueEx", "Persist", "Writes a registry value (common for persistence)",          15, ThreatLevel.Suspicious),
-            new StringPattern("schtasks",      "Persist", "Scheduled task creation",                                   20, ThreatLevel.Likely),
-            new StringPattern("sc create",     "Persist", "Service creation command",                                  20, ThreatLevel.Likely),
+                "Winlogon hijack registry key",                                                                       35, ThreatLevel.Likely),
+            new StringPattern("schtasks /create",  "Persist", "Scheduled task creation via schtasks",               25, ThreatLevel.Likely),
+            new StringPattern("sc create",         "Persist", "Service creation command",                            20, ThreatLevel.Likely),
+            // RegSetValueEx alone excluded — any installer or config writer uses it
 
             // --- Anti-analysis / anti-debug ---
-            new StringPattern("IsDebuggerPresent",           "AntiDebug", "Debugger detection API",                    20, ThreatLevel.Likely),
-            new StringPattern("CheckRemoteDebuggerPresent",  "AntiDebug", "Remote debugger detection API",             20, ThreatLevel.Likely),
-            new StringPattern("NtQueryInformationProcess",   "AntiDebug", "Used to detect debugger via NtQueryInfo",   20, ThreatLevel.Likely),
-            new StringPattern("OutputDebugString",           "AntiDebug", "Anti-debug timing trick",                   10, ThreatLevel.Suspicious),
-            new StringPattern("SandboxieControlWndClass",    "AntiDebug", "Sandboxie detection string",                30, ThreatLevel.Likely),
-            new StringPattern("vmware",                      "AntiDebug", "VMware detection string",                   15, ThreatLevel.Suspicious),
-            new StringPattern("VBoxGuest",                   "AntiDebug", "VirtualBox guest detection",                15, ThreatLevel.Suspicious),
-            new StringPattern("VBOX",                        "AntiDebug", "VirtualBox detection string",               15, ThreatLevel.Suspicious),
-            new StringPattern("wireshark",                   "AntiDebug", "Wireshark detection string",                15, ThreatLevel.Suspicious),
+            new StringPattern("IsDebuggerPresent",           "AntiDebug", "Debugger detection API",                  20, ThreatLevel.Likely),
+            new StringPattern("CheckRemoteDebuggerPresent",  "AntiDebug", "Remote debugger detection API",           20, ThreatLevel.Likely),
+            new StringPattern("NtQueryInformationProcess",   "AntiDebug", "Debugger detection via NtQueryInfo",      20, ThreatLevel.Likely),
+            new StringPattern("SandboxieControlWndClass",    "AntiDebug", "Sandboxie sandbox detection string",      30, ThreatLevel.Likely),
+            new StringPattern("VBoxGuest",                   "AntiDebug", "VirtualBox guest detection",              15, ThreatLevel.Suspicious),
+            new StringPattern("VBOX",                        "AntiDebug", "VirtualBox detection string",             15, ThreatLevel.Suspicious),
+            new StringPattern("vmware",                      "AntiDebug", "VMware detection string",                 12, ThreatLevel.Suspicious),
+            new StringPattern("wireshark",                   "AntiDebug", "Wireshark detection string",              12, ThreatLevel.Suspicious),
+            // OutputDebugString excluded — used legitimately by every debug build
 
             // --- Ransomware indicators ---
-            new StringPattern("CryptEncrypt",                  "Ransomware", "Windows crypto encryption API",          20, ThreatLevel.Suspicious),
-            new StringPattern("CryptGenKey",                   "Ransomware", "Crypto key generation",                  20, ThreatLevel.Suspicious),
-            new StringPattern("Your files have been encrypted","Ransomware", "Classic ransom note string",             80, ThreatLevel.Malicious),
-            new StringPattern("bitcoin",                       "Ransomware", "Bitcoin payment reference",              20, ThreatLevel.Suspicious),
-            new StringPattern(".onion",                        "Ransomware", "Tor hidden service address",             25, ThreatLevel.Likely),
-            new StringPattern("README_DECRYPT",                "Ransomware", "Ransom note filename",                   60, ThreatLevel.Malicious),
-            new StringPattern("HOW_TO_RECOVER",                "Ransomware", "Ransom note filename variant",           60, ThreatLevel.Malicious),
+            new StringPattern("Your files have been encrypted", "Ransomware", "Classic ransom note string",          80, ThreatLevel.Malicious),
+            new StringPattern("All your files",                 "Ransomware", "Ransomware ransom note opening",      60, ThreatLevel.Malicious),
+            new StringPattern("README_DECRYPT",                 "Ransomware", "Ransom note filename",                60, ThreatLevel.Malicious),
+            new StringPattern("HOW_TO_RECOVER",                 "Ransomware", "Ransom note filename variant",        60, ThreatLevel.Malicious),
+            new StringPattern(".onion",                         "Ransomware", "Tor hidden service address",          20, ThreatLevel.Suspicious),
+            // bitcoin excluded alone — too common in legitimate finance/crypto apps
+            // CryptEncrypt/CryptGenKey excluded — any TLS/HTTPS implementation uses them
 
             // --- Process / reflective injection ---
-            new StringPattern("VirtualAllocEx",     "Injection", "Allocates memory in remote process",                 30, ThreatLevel.Likely),
-            new StringPattern("WriteProcessMemory", "Injection", "Writes into another process",                        30, ThreatLevel.Likely),
-            new StringPattern("CreateRemoteThread", "Injection", "Creates thread in remote process",                   35, ThreatLevel.Likely),
-            new StringPattern("NtCreateThreadEx",   "Injection", "Low-level remote thread creation",                   35, ThreatLevel.Likely),
-            new StringPattern("QueueUserAPC",       "Injection", "APC injection technique",                            30, ThreatLevel.Likely),
-            new StringPattern("SetWindowsHookEx",   "Injection", "Hook-based injection / keylogging",                  25, ThreatLevel.Likely),
-            new StringPattern("OpenProcess",        "Injection", "Opens handle to another process",                    15, ThreatLevel.Suspicious),
-            new StringPattern("LoadLibrary",        "Injection", "Dynamic library loading",                            10, ThreatLevel.Suspicious),
-            new StringPattern("GetProcAddress",     "Injection", "Dynamic function resolution (common in injectors)",  15, ThreatLevel.Suspicious),
+            new StringPattern("VirtualAllocEx",     "Injection", "Allocates memory in remote process",              30, ThreatLevel.Likely),
+            new StringPattern("WriteProcessMemory", "Injection", "Writes into another process",                     30, ThreatLevel.Likely),
+            new StringPattern("CreateRemoteThread", "Injection", "Creates thread in remote process",                35, ThreatLevel.Likely),
+            new StringPattern("NtCreateThreadEx",   "Injection", "Low-level remote thread creation",                35, ThreatLevel.Likely),
+            new StringPattern("QueueUserAPC",       "Injection", "APC injection technique",                         30, ThreatLevel.Likely),
+            new StringPattern("SetWindowsHookEx",   "Injection", "System-wide hook installation",                   20, ThreatLevel.Suspicious),
+            // LoadLibrary / GetProcAddress excluded — used by every plugin system
         };
 
         public void Analyze(ReadOnlySpan<byte> fileBytes, ScanResult result)
@@ -132,12 +133,13 @@ namespace AntivirusScanner.Heuristics
                 {
                     if (str.IndexOf(pattern.Pattern, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        string dedupeKey = $"{pattern.Pattern}|{pattern.Category}";
+                        string dedupeKey = pattern.Pattern + "|" + pattern.Category;
                         if (alreadyScored.Add(dedupeKey))
                         {
                             result.AddThreat(new ThreatInfo(
                                 pattern.Level, Name,
-                                $"[{pattern.Category}] {pattern.Description} (matched: '{pattern.Pattern}')",
+                                "[" + pattern.Category + "] " + pattern.Description +
+                                " (matched: '" + pattern.Pattern + "')",
                                 pattern.Score));
                         }
                         break;
@@ -148,7 +150,7 @@ namespace AntivirusScanner.Heuristics
 
         private static List<string> ExtractStrings(ReadOnlySpan<byte> data, bool wide)
         {
-            var result  = new List<string>();
+            var strings = new List<string>();
             var current = new StringBuilder(64);
 
             int step = wide ? 2 : 1;
@@ -167,15 +169,15 @@ namespace AntivirusScanner.Heuristics
                 else
                 {
                     if (current.Length >= MinStringLength)
-                        result.Add(current.ToString());
+                        strings.Add(current.ToString());
                     current.Clear();
                 }
             }
 
             if (current.Length >= MinStringLength)
-                result.Add(current.ToString());
+                strings.Add(current.ToString());
 
-            return result;
+            return strings;
         }
     }
 }

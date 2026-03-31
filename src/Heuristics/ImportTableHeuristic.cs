@@ -7,13 +7,23 @@ namespace AntivirusScanner.Heuristics
 {
     /// <summary>
     /// Walks the PE Import Directory Table and scores the binary based on which
-    /// Win32 APIs it imports.  Dangerous APIs are grouped into functional clusters;
-    /// importing several APIs from the same cluster (or from multiple clusters)
-    /// provides stronger evidence of malicious intent than a single hit.
+    /// Win32 APIs it imports.  Dangerous APIs are grouped into functional clusters.
+    ///
+    /// Scoring philosophy:
+    ///   - APIs that are near-universal in legitimate software (LoadLibrary,
+    ///     GetProcAddress, RegSetValueEx, send/recv) carry low individual scores.
+    ///     They only become meaningful in combination.
+    ///   - APIs that are rarely used legitimately (CreateRemoteThread,
+    ///     NtUnmapViewOfSection, GetAsyncKeyState) carry higher individual scores.
+    ///   - A cluster bonus fires when 4+ functions from the same cluster are
+    ///     imported, indicating a deliberate capability rather than incidental use.
     /// </summary>
     public sealed class ImportTableHeuristic : IHeuristic
     {
         public string Name => "Import Table Analysis";
+
+        // Minimum hits in one cluster before adding the combination bonus.
+        private const int ClusterBonusThreshold = 4;
 
         private sealed class ApiEntry
         {
@@ -36,59 +46,70 @@ namespace AntivirusScanner.Heuristics
         private static readonly ApiEntry[] DangerousApis = new ApiEntry[]
         {
             // --- Process injection ---
+            // These are rarely imported by legitimate software; each hit is meaningful.
             new ApiEntry("VirtualAllocEx",          "Injection", "Allocates memory in a remote process",                 25, ThreatLevel.Likely),
             new ApiEntry("WriteProcessMemory",      "Injection", "Writes data into another process",                     25, ThreatLevel.Likely),
             new ApiEntry("CreateRemoteThread",      "Injection", "Creates a thread in another process",                  30, ThreatLevel.Likely),
             new ApiEntry("NtCreateThreadEx",        "Injection", "NT-level remote thread creation",                      30, ThreatLevel.Likely),
             new ApiEntry("RtlCreateUserThread",     "Injection", "User-mode thread injection primitive",                 30, ThreatLevel.Likely),
-            new ApiEntry("OpenProcess",             "Injection", "Opens a handle to another process",                    10, ThreatLevel.Suspicious),
+            new ApiEntry("OpenProcess",             "Injection", "Opens a handle to another process",                     5, ThreatLevel.Suspicious),
             new ApiEntry("QueueUserAPC",            "Injection", "APC-based injection",                                  25, ThreatLevel.Likely),
             new ApiEntry("SetThreadContext",        "Injection", "Thread context manipulation (process hollowing)",      25, ThreatLevel.Likely),
             new ApiEntry("NtUnmapViewOfSection",    "Injection", "Unmaps section (process hollowing)",                   30, ThreatLevel.Likely),
             new ApiEntry("ZwUnmapViewOfSection",    "Injection", "Unmaps section — Zw variant (process hollowing)",     30, ThreatLevel.Likely),
 
             // --- Hooking / keylogging ---
-            new ApiEntry("SetWindowsHookEx",        "Hooking",   "Installs a system-wide hook (keylogging / injection)", 25, ThreatLevel.Likely),
-            new ApiEntry("GetAsyncKeyState",        "Hooking",   "Polls keystroke state — keylogger pattern",             20, ThreatLevel.Likely),
-            new ApiEntry("GetKeyState",             "Hooking",   "Reads key state — keylogger pattern",                   15, ThreatLevel.Suspicious),
+            new ApiEntry("SetWindowsHookEx",        "Hooking",   "Installs a system-wide hook",                         20, ThreatLevel.Likely),
+            new ApiEntry("GetAsyncKeyState",        "Hooking",   "Polls keystroke state — keylogger pattern",            20, ThreatLevel.Likely),
+            new ApiEntry("GetKeyState",             "Hooking",   "Reads key state — keylogger pattern",                  10, ThreatLevel.Suspicious),
 
             // --- Privilege escalation ---
-            new ApiEntry("AdjustTokenPrivileges",   "Privesc",   "Adjusts access token privileges",                      15, ThreatLevel.Suspicious),
-            new ApiEntry("LookupPrivilegeValue",    "Privesc",   "Looks up privilege LUID (precedes AdjustToken)",        10, ThreatLevel.Suspicious),
-            new ApiEntry("OpenProcessToken",        "Privesc",   "Opens a process token for manipulation",                10, ThreatLevel.Suspicious),
+            // AdjustTokenPrivileges is used by legitimate software (backup, defrag),
+            // so the score is kept low; only high in combination.
+            new ApiEntry("AdjustTokenPrivileges",   "Privesc",   "Adjusts access token privileges",                      8, ThreatLevel.Suspicious),
+            new ApiEntry("LookupPrivilegeValue",    "Privesc",   "Looks up privilege LUID",                               5, ThreatLevel.Suspicious),
+            new ApiEntry("OpenProcessToken",        "Privesc",   "Opens a process token for manipulation",                5, ThreatLevel.Suspicious),
 
             // --- Network ---
-            new ApiEntry("WSAStartup",              "Network",   "Initialises Winsock",                                    8, ThreatLevel.Suspicious),
-            new ApiEntry("connect",                 "Network",   "TCP/UDP connection",                                    10, ThreatLevel.Suspicious),
-            new ApiEntry("send",                    "Network",   "Sends data over a socket",                               8, ThreatLevel.Suspicious),
-            new ApiEntry("recv",                    "Network",   "Receives data from a socket",                            8, ThreatLevel.Suspicious),
-            new ApiEntry("InternetOpenUrl",         "Network",   "Opens a URL (WinINet)",                                 10, ThreatLevel.Suspicious),
-            new ApiEntry("URLDownloadToFile",       "Network",   "Downloads file from URL",                               25, ThreatLevel.Likely),
-            new ApiEntry("HttpSendRequest",         "Network",   "HTTP request (WinINet)",                                10, ThreatLevel.Suspicious),
-            new ApiEntry("WinHttpConnect",          "Network",   "WinHTTP connection",                                    10, ThreatLevel.Suspicious),
+            // send/recv/WSAStartup/connect are in every network-enabled application.
+            // Score is kept low; the cluster bonus makes combinations meaningful.
+            new ApiEntry("WSAStartup",              "Network",   "Initialises Winsock",                                   3, ThreatLevel.Suspicious),
+            new ApiEntry("connect",                 "Network",   "TCP/UDP connection",                                    5, ThreatLevel.Suspicious),
+            new ApiEntry("send",                    "Network",   "Sends data over a socket",                              3, ThreatLevel.Suspicious),
+            new ApiEntry("recv",                    "Network",   "Receives data from a socket",                           3, ThreatLevel.Suspicious),
+            new ApiEntry("InternetOpenUrl",         "Network",   "Opens a URL (WinINet)",                                 5, ThreatLevel.Suspicious),
+            new ApiEntry("URLDownloadToFile",       "Network",   "Downloads file from URL",                              25, ThreatLevel.Likely),
+            new ApiEntry("HttpSendRequest",         "Network",   "Sends HTTP request (WinINet)",                          5, ThreatLevel.Suspicious),
+            new ApiEntry("WinHttpConnect",          "Network",   "WinHTTP connection",                                    5, ThreatLevel.Suspicious),
 
             // --- Crypto ---
-            new ApiEntry("CryptEncrypt",               "Crypto", "Encrypts data (DPAPI/BCrypt)",                          20, ThreatLevel.Suspicious),
-            new ApiEntry("CryptGenKey",                "Crypto", "Generates a cryptographic key",                         20, ThreatLevel.Suspicious),
-            new ApiEntry("BCryptEncrypt",              "Crypto", "BCrypt encryption — bulk data encryption",              20, ThreatLevel.Suspicious),
-            new ApiEntry("BCryptGenerateSymmetricKey", "Crypto", "Generates symmetric key (BCrypt)",                      20, ThreatLevel.Suspicious),
+            // CryptEncrypt et al. appear in any HTTPS client or file-signing code.
+            // Only flag at a low score; ransomware is caught by string patterns instead.
+            new ApiEntry("CryptEncrypt",               "Crypto", "Encrypts data (CryptoAPI)",                            8, ThreatLevel.Suspicious),
+            new ApiEntry("CryptGenKey",                "Crypto", "Generates a cryptographic key",                        8, ThreatLevel.Suspicious),
+            new ApiEntry("BCryptEncrypt",              "Crypto", "BCrypt bulk encryption",                               8, ThreatLevel.Suspicious),
+            new ApiEntry("BCryptGenerateSymmetricKey", "Crypto", "Generates BCrypt symmetric key",                       8, ThreatLevel.Suspicious),
 
             // --- Anti-debug ---
-            new ApiEntry("IsDebuggerPresent",            "AntiDebug", "Checks for attached debugger",                     20, ThreatLevel.Likely),
-            new ApiEntry("CheckRemoteDebuggerPresent",   "AntiDebug", "Checks for remote debugger",                       20, ThreatLevel.Likely),
-            new ApiEntry("NtQueryInformationProcess",    "AntiDebug", "Queries process info (used to detect debugger)",   20, ThreatLevel.Likely),
-            new ApiEntry("OutputDebugString",            "AntiDebug", "Timing-based anti-debug trick",                    10, ThreatLevel.Suspicious),
-            new ApiEntry("FindWindow",                   "AntiDebug", "May search for analysis tool windows",              8, ThreatLevel.Suspicious),
+            new ApiEntry("IsDebuggerPresent",            "AntiDebug", "Checks for attached debugger",                    20, ThreatLevel.Likely),
+            new ApiEntry("CheckRemoteDebuggerPresent",   "AntiDebug", "Checks for remote debugger",                      20, ThreatLevel.Likely),
+            new ApiEntry("NtQueryInformationProcess",    "AntiDebug", "Debugger detection via NtQueryInfo",              20, ThreatLevel.Likely),
+            new ApiEntry("OutputDebugString",            "AntiDebug", "Timing-based anti-debug trick",                    5, ThreatLevel.Suspicious),
+            new ApiEntry("FindWindow",                   "AntiDebug", "May search for analysis tool windows",             3, ThreatLevel.Suspicious),
 
             // --- Persistence ---
-            new ApiEntry("RegSetValueEx",           "Persist",   "Writes a registry value",                              15, ThreatLevel.Suspicious),
-            new ApiEntry("RegCreateKeyEx",          "Persist",   "Creates a registry key",                               10, ThreatLevel.Suspicious),
-            new ApiEntry("CreateService",           "Persist",   "Creates a Windows service",                            25, ThreatLevel.Likely),
+            // RegSetValueEx / RegCreateKeyEx are used by every installer.
+            // Only score if combined with other indicators (cluster bonus).
+            new ApiEntry("RegSetValueEx",           "Persist",   "Writes a registry value",                              5, ThreatLevel.Suspicious),
+            new ApiEntry("RegCreateKeyEx",          "Persist",   "Creates a registry key",                               3, ThreatLevel.Suspicious),
+            new ApiEntry("CreateService",           "Persist",   "Creates a Windows service",                           20, ThreatLevel.Likely),
 
             // --- Dynamic resolution ---
-            new ApiEntry("GetProcAddress",          "DynResolve", "Resolves API at runtime (common in injectors)",        15, ThreatLevel.Suspicious),
-            new ApiEntry("LoadLibrary",             "DynResolve", "Loads DLL at runtime",                                 10, ThreatLevel.Suspicious),
-            new ApiEntry("LdrLoadDll",              "DynResolve", "NT-level DLL loading",                                 20, ThreatLevel.Likely),
+            // GetProcAddress + LoadLibrary appear in virtually every Windows binary.
+            // Score is minimal; they are only relevant alongside injection APIs.
+            new ApiEntry("GetProcAddress",          "DynResolve", "Resolves API at runtime",                             5, ThreatLevel.Suspicious),
+            new ApiEntry("LoadLibrary",             "DynResolve", "Loads DLL at runtime",                                3, ThreatLevel.Suspicious),
+            new ApiEntry("LdrLoadDll",              "DynResolve", "NT-level DLL loading",                               20, ThreatLevel.Likely),
         };
 
         public void Analyze(ReadOnlySpan<byte> fileBytes, ScanResult result)
@@ -136,7 +157,7 @@ namespace AntivirusScanner.Heuristics
                 {
                     result.AddThreat(new ThreatInfo(
                         api.Level, Name,
-                        $"[{api.Cluster}] Imports '{api.FunctionName}' — {api.Description}",
+                        "[" + api.Cluster + "] Imports '" + api.FunctionName + "' — " + api.Description,
                         api.Score));
 
                     if (!clusterHits.TryGetValue(api.Cluster, out int count))
@@ -147,11 +168,12 @@ namespace AntivirusScanner.Heuristics
 
             foreach (KeyValuePair<string, int> entry in clusterHits)
             {
-                if (entry.Value >= 3)
+                if (entry.Value >= ClusterBonusThreshold)
                 {
                     result.AddThreat(new ThreatInfo(
                         ThreatLevel.Likely, Name,
-                        $"Imports {entry.Value} functions from the '{entry.Key}' cluster — strongly indicative of malicious capability.",
+                        "Imports " + entry.Value + " functions from the '" + entry.Key +
+                        "' cluster — combination strongly indicative of malicious capability.",
                         score: 20));
                 }
             }
