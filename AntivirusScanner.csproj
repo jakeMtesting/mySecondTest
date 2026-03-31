@@ -2,12 +2,23 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net5.0</TargetFramework>
+    <TargetFramework>net5.0-windows</TargetFramework>
     <LangVersion>9.0</LangVersion>
     <Nullable>enable</Nullable>
     <AssemblyName>AntivirusScanner</AssemblyName>
     <RootNamespace>AntivirusScanner</RootNamespace>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!-- Exclude files that now live in AntivirusScannerCore -->
+  <ItemGroup>
+    <Compile Remove="src\Heuristics\**\*.cs" />
+    <Compile Remove="src\Models\**\*.cs" />
+    <Compile Remove="src\Scanner.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="AntivirusScannerCore\AntivirusScannerCore.csproj" />
+  </ItemGroup>
 
 </Project>
